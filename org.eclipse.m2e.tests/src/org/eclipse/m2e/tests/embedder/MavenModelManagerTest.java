@@ -20,7 +20,6 @@ import java.io.InputStream;
 import java.io.StringWriter;
 import java.util.List;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -44,7 +43,6 @@ import org.eclipse.m2e.core.MavenPlugin;
 import org.eclipse.m2e.core.embedder.MavenModelManager;
 import org.eclipse.m2e.core.project.IMavenProjectFacade;
 import org.eclipse.m2e.core.project.ResolverConfiguration;
-import org.eclipse.m2e.model.edit.pom.util.PomResourceImpl;
 import org.eclipse.m2e.tests.common.AbstractMavenProjectTestCase;
 import org.eclipse.m2e.tests.common.RequireMavenExecutionContext;
 
@@ -57,8 +55,6 @@ public class MavenModelManagerTest extends AbstractMavenProjectTestCase {
   private MavenModelManager modelManager = MavenPlugin.getMavenModelManager();
 
   private IProject project;
-
-  private PomResourceImpl resource = null;
 
   @Override
   @Before
@@ -74,18 +70,6 @@ public class MavenModelManagerTest extends AbstractMavenProjectTestCase {
     }
     if(!project.isOpen()) {
       project.open(new NullProgressMonitor());
-    }
-  }
-
-  @Override
-  @After
-  public void tearDown() throws Exception {
-    try {
-      if(resource != null) {
-        resource.unload();
-      }
-    } finally {
-      super.tearDown();
     }
   }
 
