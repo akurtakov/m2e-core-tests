@@ -29,6 +29,10 @@
 					<version>${tycho-version}</version>
 					<configuration>
 						<argLine>${tycho.testArgLine} ${tycho.test.platformArgs}</argLine>
+						<environmentVariables>
+							<!-- ProjectRegistryManagerTest.testEnvironmentVariablesConsidered uses ${env.TEMP}, which is only set on Windows by default -->
+							<TEMP>${project.build.directory}</TEMP>
+						</environmentVariables>
 					</configuration>
 				</plugin>
 			</plugins>

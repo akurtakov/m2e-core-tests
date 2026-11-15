@@ -23,8 +23,10 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -33,7 +35,6 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
-import org.junit.runner.RunWith;
 
 import org.eclipse.aether.repository.RepositoryPolicy;
 import org.eclipse.core.resources.IFile;
@@ -64,6 +65,7 @@ import org.eclipse.m2e.core.embedder.ArtifactRef;
 import org.eclipse.m2e.core.embedder.IMavenExecutionContext;
 import org.eclipse.m2e.core.internal.IMavenConstants;
 import org.eclipse.m2e.core.internal.MavenPluginActivator;
+import org.eclipse.m2e.core.internal.embedder.MavenImpl;
 import org.eclipse.m2e.core.internal.preferences.MavenConfigurationImpl;
 import org.eclipse.m2e.core.internal.project.registry.MavenProjectFacade;
 import org.eclipse.m2e.core.internal.project.registry.ProjectRegistryManager;
@@ -78,11 +80,9 @@ import org.eclipse.m2e.tests.common.AbstractMavenProjectTestCase;
 import org.eclipse.m2e.tests.common.ClasspathHelpers;
 import org.eclipse.m2e.tests.common.FilexWagon;
 import org.eclipse.m2e.tests.common.HttxWagon;
-import org.eclipse.m2e.tests.common.MavenRunner;
 import org.eclipse.m2e.tests.common.RequireMavenExecutionContext;
 import org.eclipse.m2e.tests.common.WorkspaceHelpers;
 
-@RunWith(MavenRunner.class)
 public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
 
   ProjectRegistryManager manager;
@@ -132,6 +132,23 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
   private Set<Artifact> getMavenProjectArtifacts(IMavenProjectFacade f1) throws CoreException {
     MavenProject mavenProject = f1.getMavenProject(monitor);
     return mavenProject.getArtifacts();
+  }
+
+  /**
+   * Workspace artifacts resolve to the output folder of the project once it exists and to its pom.xml before that.
+   */
+  private static void assertWorkspaceArtifact(IProject project, File file) throws IOException {
+    File pom = project.getFile(IMavenConstants.POM_FILE_NAME).getLocation().toFile().getCanonicalFile();
+    File outputFolder = project.getFolder("target/classes").getLocation().toFile().getCanonicalFile();
+    File actual = file.getCanonicalFile();
+    assertTrue(actual + " is not resolved from workspace project " + project.getName(),
+        actual.equals(pom) || actual.equals(outputFolder));
+  }
+
+  private void refresh(boolean offline, boolean forceDependencyUpdate, Collection<IFile> pomFiles)
+      throws CoreException {
+    MavenImpl.execute(MavenPlugin.getMaven(), offline, forceDependencyUpdate,
+        (context, monitor) -> manager.refresh(pomFiles, monitor), monitor);
   }
 
   @Test
@@ -284,7 +301,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     WorkspaceHelpers
         .assertErrorMarker(
             IMavenConstants.MARKER_POM_LOADING_ID,
-            "Project build error: Non-resolvable parent POM for t001:t001-p2:0.0.1-SNAPSHOT: Could not find artifact t001:t001-p3:pom:0.0.1-SNAPSHOT in central (file:repositories/remoterepo) and 'parent.relativePath' points at wrong local POM",
+            "Project build error: Non-resolvable parent POM for t001:t001-p2:0.0.1-SNAPSHOT: The following artifacts could not be resolved: t001:t001-p3:pom:0.0.1-SNAPSHOT (absent): Could not find artifact t001:t001-p3:pom:0.0.1-SNAPSHOT in local-central (file:repositories/remoterepo) and 'parent.relativePath' points at wrong local POM",
             6 /*lineNumber*/, p2);
 
     IProject p3 = createExisting("t001-p3");
@@ -384,18 +401,14 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     waitForJobsToComplete();
 
     IMavenProjectFacade f1 = manager.create(p1, monitor);
-    getParentProject(f1);
-    assertEquals(p2.getFile(IMavenConstants.POM_FILE_NAME).getLocation().toFile(), f1.getMavenProject(monitor)
-        .getParentArtifact().getFile());
+    assertEquals(p2.getFile(IMavenConstants.POM_FILE_NAME).getLocation().toFile(), getParentProject(f1).getFile());
     assertEquals("workspace", f1.getMavenProject(monitor).getProperties().get("property"));
 
     deleteProject(p2);
     waitForJobsToComplete();
 
     f1 = manager.create(p1, monitor);
-    getParentProject(f1);
-    // assertTrue(f1.getMavenProject().getParent().getFile().getAbsolutePath().startsWith(repo.getAbsolutePath()));
-    assertStartWith(repo.getAbsolutePath(), f1.getMavenProject(monitor).getParentArtifact().getFile().getAbsolutePath());
+    assertStartWith(repo.getAbsolutePath(), getParentProject(f1).getFile().getAbsolutePath());
     assertEquals("repository", f1.getMavenProject(monitor).getProperties().get("property"));
   }
 
@@ -412,13 +425,13 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       assertNull(manager.getProject(p1));
       assertNull(manager.getProject(p2));
 
-      manager.refresh(getPomFiles(p1, p2), monitor);
+      refresh(false, true, getPomFiles(p1, p2));
 
       IMavenProjectFacade f1 = manager.create(p1, monitor);
       assertEquals("workspace", f1.getMavenProject(monitor).getProperties().get("property"));
 
       p2.delete(true, monitor);
-      manager.refresh(getPomFiles(p1, p2), monitor);
+      refresh(false, true, getPomFiles(p1, p2));
 
       f1 = manager.create(p1, monitor);
       assertEquals("repository", f1.getMavenProject(monitor).getProperties().get("property"));
@@ -432,7 +445,9 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
   protected MavenProject getParentProject(final IMavenProjectFacade f) throws CoreException {
     // create execution context with proper resolver configuration
     IMavenExecutionContext context = manager.createExecutionContext(f.getPom(), f.getConfiguration());
-    return context.execute(f.getMavenProject(monitor), (context1, monitor) -> f.getMavenProject(monitor).getParent(),
+    return context.execute(f.getMavenProject(monitor),
+        (context1, monitor) -> ((MavenImpl) MavenPlugin.getMaven()).resolveParentProject(f.getMavenProject(monitor),
+            monitor),
         monitor);
   }
 
@@ -498,7 +513,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     IMavenProjectFacade f1 = manager.create(p1, monitor);
     List<Artifact> a1 = new ArrayList<>(f1.getMavenProject(monitor).getArtifacts());
     assertEquals(1, f1.getMavenProject(monitor).getArtifacts().size());
-    assertEquals(p2.getFile(IMavenConstants.POM_FILE_NAME).getLocation().toFile(), a1.get(0).getFile());
+    assertWorkspaceArtifact(p2, a1.get(0).getFile());
 
     // update p2 to have new version
     copyContent(p2, "pom_newVersion.xml", "pom.xml");
@@ -512,7 +527,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     f1 = manager.create(p1, monitor);
     a1 = new ArrayList<>(f1.getMavenProject(monitor).getArtifacts());
     assertEquals(1, f1.getMavenProject(monitor).getArtifacts().size());
-    assertEquals(p2.getFile(IMavenConstants.POM_FILE_NAME).getLocation().toFile(), a1.get(0).getFile());
+    assertWorkspaceArtifact(p2, a1.get(0).getFile());
   }
 
   @Test
@@ -538,7 +553,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
 
       // add new dependency to p2, which should trigger update of p1
       copyContent(p2, "pom_newDependency.xml", "pom.xml", false /*don't wait for jobs to complete*/);
-      manager.refresh(getPomFiles(p2), monitor);
+      refresh(false, false, getPomFiles(p2));
 
       // assert p1 got refreshed
       f1 = manager.create(p1, monitor);
@@ -618,7 +633,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       Artifact[] a1 = getMavenProjectArtifacts(f1).toArray(new Artifact[0]);
       // assertTrue(a1[0].getFile().getAbsolutePath().startsWith(workspace.getRoot().getLocation().toFile().getAbsolutePath()));
       assertStartWith(workspace.getRoot().getLocation().toFile().getAbsolutePath(), a1[0].getFile().getAbsolutePath());
-      assertEquals(p2.getFile("pom.xml").getLocation().toFile(), a1[1].getFile());
+      assertWorkspaceArtifact(p2, a1[1].getFile());
 
       assertEquals(1, f2.getMavenProjectArtifacts().size());
       Artifact a2 = getMavenProjectArtifacts(f2).iterator().next();
@@ -640,7 +655,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       Artifact[] a1 = getMavenProjectArtifacts(f1).toArray(new Artifact[0]);
       // assertTrue(a1[0].getFile().getAbsolutePath().startsWith(repo.getAbsolutePath()));
       assertStartWith(repo.getAbsolutePath(), a1[0].getFile().getAbsolutePath());
-      assertEquals(p2.getFile("pom.xml").getLocation().toFile(), a1[1].getFile());
+      assertWorkspaceArtifact(p2, a1[1].getFile());
 
       assertEquals(1, f2.getMavenProjectArtifacts().size());
       Artifact a2 = getMavenProjectArtifacts(f1).iterator().next();
@@ -691,8 +706,9 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     IMavenProjectFacade f1 = manager.create(p1, monitor);
 
     Artifact[] a1 = getMavenProjectArtifacts(f1).toArray(new Artifact[0]);
-    assertEquals(1, a1.length);
+    assertEquals(2, a1.length);
     assertEquals(jar, a1[0].getFile());
+    assertEquals("log4j-api", a1[1].getArtifactId());
     assertTrue(jar.exists());
   }
 
@@ -750,7 +766,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     File file = new File(repo, "junit/junit/4.13.1/junit-4.13.1.jar");
     assertTrue("Can't delete file " + file.getAbsolutePath(), !file.exists() || file.delete());
 
-    manager.refresh(getPomFiles(p1), monitor);
+    refresh(true /*offline*/, false, getPomFiles(p1));
     assertEquals(false, file.exists());
 
     {
@@ -759,7 +775,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       assertEquals(false, a1.get(0).isResolved());
     }
 
-    manager.refresh(getPomFiles(p1), monitor);
+    refresh(false /*offline*/, false, getPomFiles(p1));
     assertEquals(true, file.exists());
 
     {
@@ -797,15 +813,15 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     IProject p2 = createExisting("optionaldependency-p02");
     waitForJobsToComplete();
 
-    IFile pom1 = p1.getFile("pom.xml");
     IFile pom2 = p2.getFile("pom.xml");
 
     {
       IMavenProjectFacade f = manager.create(pom2, false, null);
       Artifact[] a = getMavenProjectArtifacts(f).toArray(new Artifact[0]);
-      assertEquals(2, a.length);
-      assertEquals(pom1.getLocation().toFile().getCanonicalFile(), a[0].getFile().getCanonicalFile());
+      assertEquals(3, a.length);
+      assertWorkspaceArtifact(p1, a[0].getFile());
       assertEquals("junit-4.13.1.jar", a[1].getFile().getName());
+      assertEquals("hamcrest-core-1.3.jar", a[2].getFile().getName());
     }
 
     copyContent(p1, "pom-changed.xml", "pom.xml");
@@ -814,7 +830,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       IMavenProjectFacade f = manager.create(pom2, false, null);
       Artifact[] a = getMavenProjectArtifacts(f).toArray(new Artifact[0]);
       assertEquals(1, a.length);
-      assertEquals(pom1.getLocation().toFile().getCanonicalFile(), a[0].getFile().getCanonicalFile());
+      assertWorkspaceArtifact(p1, a[0].getFile());
     }
   }
 
@@ -859,15 +875,15 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     IProject p2 = createExisting("changedscope-p02");
     waitForJobsToComplete();
 
-    IFile pom1 = p1.getFile("pom.xml");
     IFile pom2 = p2.getFile("pom.xml");
 
     {
       IMavenProjectFacade f = manager.create(pom2, false, null);
       Artifact[] a = getMavenProjectArtifacts(f).toArray(new Artifact[0]);
-      assertEquals(2, a.length);
-      assertEquals(pom1.getLocation().toFile().getCanonicalFile(), a[0].getFile().getCanonicalFile());
+      assertEquals(3, a.length);
+      assertWorkspaceArtifact(p1, a[0].getFile());
       assertEquals("junit-4.13.1.jar", a[1].getFile().getName());
+      assertEquals("hamcrest-core-1.3.jar", a[2].getFile().getName());
     }
 
     copyContent(p1, "pom-scope-changed.xml", "pom.xml");
@@ -876,7 +892,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       IMavenProjectFacade f = manager.create(pom2, false, null);
       Artifact[] a = getMavenProjectArtifacts(f).toArray(new Artifact[0]);
       assertEquals("provided scope dependency should disappear", 1, a.length);
-      assertEquals(pom1.getLocation().toFile().getCanonicalFile(), a[0].getFile().getCanonicalFile());
+      assertWorkspaceArtifact(p1, a[0].getFile());
     }
   }
 
@@ -888,7 +904,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
 
     IMavenProjectFacade f1 = manager.create(projects[0], monitor);
     ArrayList<ArtifactRef> a1 = new ArrayList<>(f1.getMavenProjectArtifacts());
-    assertEquals(2, a1.size());
+    assertEquals(3, a1.size());
     assertEquals("p002", a1.get(0).artifactKey().artifactId());
   }
 
@@ -903,7 +919,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     ArrayList<Artifact> a1 = new ArrayList<>(p1.getArtifacts());
     assertEquals(1, a1.size());
 
-    assertEquals(projects[1].getLocation().append("target/classes").toFile(), a1.get(0).getFile());
+    assertWorkspaceArtifact(projects[1], a1.get(0).getFile());
   }
 
   @Test
@@ -1032,7 +1048,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
 
       FileUtils.copyDirectoryStructure(new File("repositories/updateRepo2"), updatepolicyrepoDir);
 
-      manager.refresh(getPomFiles(p1), monitor);
+      refresh(false, false, getPomFiles(p1));
 
       // assert dependency version did not change
       f1 = manager.create(p1, monitor);
@@ -1042,7 +1058,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
 
       ((MavenConfigurationImpl) mavenConfiguration).setGlobalUpdatePolicy(null);
 
-      manager.refresh(getPomFiles(p1), monitor);
+      refresh(false, false, getPomFiles(p1));
       f1 = manager.create(p1, monitor);
       a1 = new ArrayList<>(f1.getMavenProject(monitor).getArtifacts());
       assertEquals(1, a1.size());
@@ -1081,7 +1097,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     FileUtils.copyDirectoryStructure(new File("repositories/updateRepo1"), updatepolicyrepoDir);
 
     // refresh one of the two projects
-    manager.refresh(getPomFiles(projects[0]), monitor);
+    refresh(false, true, getPomFiles(projects[0]));
 
     // both projects should now have resolved the missing dependency
 
@@ -1110,7 +1126,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
 
       p[0].close(monitor);
 
-      manager.refresh(getPomFiles(p), monitor);
+      refresh(false, true, getPomFiles(p));
 
       assertEquals(2, events.size());
 
@@ -1161,7 +1177,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     HttxWagon.setRequestFilterPattern("missing/missing/.*", true);
 
     Set<IFile> pomFiles = getPomFiles(projects);
-    manager.refresh(pomFiles, monitor);
+    refresh(false, true, pomFiles);
 
     assertEquals(3, FilexWagon.getRequests().size() + HttxWagon.getRequests().size());
   }
@@ -1189,7 +1205,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     HttxWagon.setRequestFailPattern(null);
 
     Set<IFile> pomFiles = getPomFiles(project);
-    manager.refresh(pomFiles, monitor);
+    refresh(false, true, pomFiles);
 
     assertNoErrors(project);
   }
@@ -1214,7 +1230,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       setChecksumPolicy(ArtifactRepositoryPolicy.CHECKSUM_POLICY_WARN);
 
       Set<IFile> pomFiles = getPomFiles(project);
-      manager.refresh(pomFiles, monitor);
+      refresh(false, true, pomFiles);
 
       waitForJobsToComplete();
       assertNoErrors(project);
@@ -1258,7 +1274,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
       setChecksumPolicy(ArtifactRepositoryPolicy.CHECKSUM_POLICY_WARN);
 
       Set<IFile> pomFiles = getPomFiles(project);
-      manager.refresh(pomFiles, monitor);
+      refresh(false, true, pomFiles);
 
       waitForJobsToComplete();
       assertNoErrors(project);
@@ -1382,7 +1398,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     // force download of deps3 from repo
     FileUtils.deleteDirectory(new File(repo, "test/436929-deps3"));
     Set<IFile> pomFiles = getPomFiles(p1);
-    manager.refresh(pomFiles, monitor);
+    refresh(false, true, pomFiles);
     // both p1 and p2 reference deps2
     assertEquals(Set.of(p1 /* self */, p2), getProjectsFromEvents(events));
   }
@@ -1404,7 +1420,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     assertNotNull(extensionRealm);
 
     Set<IFile> pomFiles = getPomFiles(project);
-    manager.refresh(pomFiles, monitor);
+    refresh(false, true, pomFiles);
     project.build(IncrementalProjectBuilder.FULL_BUILD, monitor);
     waitForJobsToComplete();
     assertNoErrors(project);
@@ -1432,7 +1448,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     assertNotNull(extensionRealm);
 
     Set<IFile> pomFiles = getPomFiles(project);
-    manager.refresh(pomFiles, monitor);
+    refresh(false, true, pomFiles);
     project.build(IncrementalProjectBuilder.FULL_BUILD, monitor);
     waitForJobsToComplete();
     assertNoErrors(project);
@@ -1449,7 +1465,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     waitForJobsToComplete();
 
     Set<IFile> pomFiles = getPomFiles(project);
-    manager.refresh(pomFiles, monitor); // shouldn't throw any exceptions
+    refresh(false, true, pomFiles); // shouldn't throw any exceptions
 
     List<IMarker> markers = WorkspaceHelpers.findErrorMarkers(project);
     assertEquals(WorkspaceHelpers.toString(markers), 1, markers.size());
@@ -1477,7 +1493,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     assertTrue(HttxWagon.getRequests().isEmpty());
 
     Set<IFile> pomFiles = getPomFiles(projects[1]);
-    manager.refresh(pomFiles, monitor); // shouldn't throw any exceptions
+    refresh(false, true, pomFiles); // shouldn't throw any exceptions
     assertNoErrors(projects[1]);
 
     assertTrue(FilexWagon.getRequests().isEmpty());
@@ -1493,7 +1509,7 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     assertNoErrors(projects[1]);
 
     Set<IFile> pomFiles = getPomFiles(projects[0]);
-    manager.refresh(pomFiles, monitor);
+    refresh(false, false, pomFiles);
     assertNoErrors(projects[0]);
   }
 }
