@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008-2010 Sonatype, Inc.
+ * Copyright (c) 2008-2026 Sonatype, Inc.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
  * which accompanies this distribution, and is available at
@@ -27,7 +27,6 @@ import java.util.Arrays;
 
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IncrementalProjectBuilder;
@@ -38,6 +37,9 @@ import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.jdt.launching.IJavaLaunchConfigurationConstants;
 import org.eclipse.jdt.launching.IRuntimeClasspathEntry;
+import org.eclipse.jdt.launching.IVMInstall;
+import org.eclipse.jdt.launching.IVMInstallType;
+import org.eclipse.jdt.launching.JavaRuntime;
 
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
@@ -50,11 +52,11 @@ import org.eclipse.m2e.core.project.ResolverConfiguration;
 import org.eclipse.m2e.jdt.internal.launch.MavenRuntimeClasspathProvider;
 import org.eclipse.m2e.jdt.internal.launch.MavenSourcePathProvider;
 import org.eclipse.m2e.tests.common.AbstractMavenProjectTestCase;
-import org.eclipse.m2e.tests.common.MavenRunner;
+import org.eclipse.m2e.tests.common.RequireMavenExecutionContext;
 import org.eclipse.m2e.tests.common.WorkspaceHelpers;
 
 
-@RunWith(MavenRunner.class)
+@RequireMavenExecutionContext
 public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
 
   @Override
@@ -148,11 +150,30 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
   IRuntimeClasspathEntry[] getUserClasspathEntries(IRuntimeClasspathEntry[] entries) {
     ArrayList<IRuntimeClasspathEntry> result = new ArrayList<>();
     for(IRuntimeClasspathEntry entry : entries) {
-      if(IRuntimeClasspathEntry.USER_CLASSES == entry.getClasspathProperty()) {
+      // with a Java 9+ JRE the launch configuration is modular and entries are on the class path instead
+      if((IRuntimeClasspathEntry.USER_CLASSES == entry.getClasspathProperty()
+          || IRuntimeClasspathEntry.CLASS_PATH == entry.getClasspathProperty()) && !isJreEntry(entry)) {
         result.add(entry);
       }
     }
     return result.toArray(new IRuntimeClasspathEntry[result.size()]);
+  }
+
+  private static boolean isJreEntry(IRuntimeClasspathEntry entry) {
+    String location = entry.getLocation();
+    if(location == null) {
+      return false;
+    }
+    IPath path = IPath.fromOSString(location);
+    for(IVMInstallType type : JavaRuntime.getVMInstallTypes()) {
+      for(IVMInstall vm : type.getVMInstalls()) {
+        if(vm.getInstallLocation() != null
+            && IPath.fromOSString(vm.getInstallLocation().getAbsolutePath()).isPrefixOf(path)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   @Test
@@ -204,9 +225,11 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     IRuntimeClasspathEntry[] resolvedClasspath = classpathProvider.resolveClasspath(unresolvedClasspath, configuration);
     IRuntimeClasspathEntry[] userClasspath = getUserClasspathEntries(resolvedClasspath);
 
-    assertEquals(Arrays.asList(userClasspath).toString(), 3, userClasspath.length);
+    assertEquals(Arrays.asList(userClasspath).toString(), 4, userClasspath.length);
     assertEquals(IPath.fromOSString("/runtimeclasspath-junit/target/test-classes"), userClasspath[0].getPath());
     assertEquals(IPath.fromOSString("/runtimeclasspath-junit/target/classes"), userClasspath[1].getPath());
+    assertEquals("junit-4.13.1.jar", userClasspath[2].getPath().lastSegment());
+    assertEquals("hamcrest-core-1.3.jar", userClasspath[3].getPath().lastSegment());
   }
 
 //  This require TestNG plugin to be present  
@@ -244,9 +267,10 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     IRuntimeClasspathEntry[] resolvedClasspath = classpathProvider.resolveClasspath(unresolvedClasspath, configuration);
     IRuntimeClasspathEntry[] userClasspath = getUserClasspathEntries(resolvedClasspath);
 
-    assertEquals(Arrays.asList(userClasspath).toString(), 2, userClasspath.length);
+    assertEquals(Arrays.asList(userClasspath).toString(), 3, userClasspath.length);
     assertEquals(IPath.fromOSString("/runtimeclasspath-providedscope/target/classes"), userClasspath[0].getPath());
     assertEquals("junit-4.13.1.jar", userClasspath[1].getPath().lastSegment());
+    assertEquals("hamcrest-core-1.3.jar", userClasspath[2].getPath().lastSegment());
   }
 
   @Test
@@ -262,10 +286,11 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     IRuntimeClasspathEntry[] resolvedClasspath = classpathProvider.resolveClasspath(unresolvedClasspath, configuration);
     IRuntimeClasspathEntry[] userClasspath = getUserClasspathEntries(resolvedClasspath);
 
-    assertEquals(Arrays.asList(userClasspath).toString(), 3, userClasspath.length);
+    assertEquals(Arrays.asList(userClasspath).toString(), 4, userClasspath.length);
     assertEquals(IPath.fromOSString("/runtimeclasspath-providedscope/target/test-classes"), userClasspath[0].getPath());
     assertEquals(IPath.fromOSString("/runtimeclasspath-providedscope/target/classes"), userClasspath[1].getPath());
     assertEquals("junit-4.13.1.jar", userClasspath[2].getPath().lastSegment());
+    assertEquals("hamcrest-core-1.3.jar", userClasspath[3].getPath().lastSegment());
   }
 
   @Test
@@ -281,10 +306,11 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     IRuntimeClasspathEntry[] resolvedClasspath = classpathProvider.resolveClasspath(unresolvedClasspath, configuration);
     IRuntimeClasspathEntry[] userClasspath = getUserClasspathEntries(resolvedClasspath);
 
-    assertEquals(Arrays.asList(userClasspath).toString(), 3, userClasspath.length);
+    assertEquals(Arrays.asList(userClasspath).toString(), 4, userClasspath.length);
     assertEquals(IPath.fromOSString("/runtimeclasspath-providedscope/target/test-classes"), userClasspath[0].getPath());
     assertEquals(IPath.fromOSString("/runtimeclasspath-providedscope/target/classes"), userClasspath[1].getPath());
     assertEquals("junit-4.13.1.jar", userClasspath[2].getPath().lastSegment());
+    assertEquals("hamcrest-core-1.3.jar", userClasspath[3].getPath().lastSegment());
   }
 
   @Test
@@ -299,7 +325,8 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     }
 
     Dependency d = model.getDependencies().get(0);
-    d.setSystemPath(new File("repositories/remoterepo/log4j/log4j/1.2.13/log4j-1.2.13.jar").getCanonicalPath());
+    d.setSystemPath(
+        new File("repositories/remoterepo/org/codehaus/plexus/plexus-utils/1.1/plexus-utils-1.1.jar").getCanonicalPath());
 
     MavenXpp3Writer writer = new MavenXpp3Writer();
 
@@ -323,7 +350,7 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
 
     assertEquals(Arrays.asList(userClasspath).toString(), 2, userClasspath.length);
     assertEquals(IPath.fromOSString("/runtimeclasspath-systemscope/target/classes"), userClasspath[0].getPath());
-    assertEquals("log4j-1.2.13.jar", userClasspath[1].getPath().lastSegment());
+    assertEquals("plexus-utils-1.1.jar", userClasspath[1].getPath().lastSegment());
   }
 
   @Test
@@ -339,8 +366,10 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     IRuntimeClasspathEntry[] resolvedClasspath = classpathProvider.resolveClasspath(unresolvedClasspath, configuration);
     IRuntimeClasspathEntry[] userClasspath = getUserClasspathEntries(resolvedClasspath);
 
-    assertEquals(Arrays.asList(userClasspath).toString(), 1, userClasspath.length);
+    // the project of the launch configuration is one of its custom entries
+    assertEquals(Arrays.asList(userClasspath).toString(), 2, userClasspath.length);
     assertEquals("custom.jar", userClasspath[0].getPath().lastSegment());
+    assertEquals(IPath.fromOSString("/runtimeclasspath-customentries/target/classes"), userClasspath[1].getPath());
   }
 
   @Test
@@ -357,8 +386,10 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
     IRuntimeClasspathEntry[] resolvedClasspath = classpathProvider.resolveClasspath(unresolvedClasspath, configuration);
     IRuntimeClasspathEntry[] userClasspath = getUserClasspathEntries(resolvedClasspath);
 
-    assertEquals(Arrays.asList(userClasspath).toString(), 1, userClasspath.length);
-    assertEquals(javaproject.getFullPath(), userClasspath[0].getPath());
+    // the project of the launch configuration is one of its custom entries, the Java project resolves to its output folder
+    assertEquals(Arrays.asList(userClasspath).toString(), 2, userClasspath.length);
+    assertEquals(IPath.fromOSString("/runtimeclasspath-customentries/target/classes"), userClasspath[0].getPath());
+    assertEquals(javaproject.getFullPath().append("target/classes"), userClasspath[1].getPath());
   }
 
   @Test
@@ -379,7 +410,8 @@ public class ClasspathProviderTest extends AbstractMavenProjectTestCase {
 
     assertEquals(Arrays.asList(userClasspath).toString(), 3, userClasspath.length);
     assertEquals(IPath.fromOSString("/runtimeclasspath-custombuildpath/target/classes"), userClasspath[0].getPath());
-    assertEquals(javaproject.getFullPath(), userClasspath[1].getPath());
+    // the Java project resolves to its output folder
+    assertEquals(javaproject.getFullPath().append("target/classes"), userClasspath[1].getPath());
     assertEquals("custom.jar", userClasspath[2].getPath().lastSegment());
   }
 
