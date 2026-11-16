@@ -466,6 +466,36 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     }
   }
 
+  @Test
+  public void test006_dependentOfProjectReadAgainForWorkspaceParent() throws Exception {
+    boolean oldSuspended = Job.getJobManager().isSuspended();
+
+    Job.getJobManager().suspend();
+    try {
+      // t006-p5 depends on t006-p4, which is not available yet
+      IProject p5 = createExisting("t006-p5");
+      refresh(false, true, getPomFiles(p5));
+
+      // t006-p4 is read again for its workspace grandparent t006-p2, t006-p5 has to be updated nevertheless
+      IProject p2 = createExisting("t006-p2");
+      IProject p3 = createExisting("t006-p3");
+      IProject p4 = createExisting("t006-p4");
+      refresh(false, true, getPomFiles(p2, p3, p4));
+
+      IMavenProjectFacade f5 = manager.create(p5, monitor);
+      Set<Artifact> artifacts = getMavenProjectArtifacts(f5);
+      assertEquals(1, artifacts.size());
+      Artifact a = artifacts.iterator().next();
+      assertEquals("t006-p4", a.getArtifactId());
+      assertTrue(a.isResolved());
+      assertStartWith(p4.getLocation().toFile().getAbsolutePath(), a.getFile().getAbsolutePath());
+    } finally {
+      if(!oldSuspended) {
+        Job.getJobManager().resume();
+      }
+    }
+  }
+
   protected MavenProject getParentProject(final IMavenProjectFacade f) throws CoreException {
     // create execution context with proper resolver configuration
     IMavenExecutionContext context = manager.createExecutionContext(f.getPom(), f.getConfiguration());
