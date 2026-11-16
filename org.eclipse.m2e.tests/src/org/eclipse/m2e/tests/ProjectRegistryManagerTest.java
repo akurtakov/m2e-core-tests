@@ -496,6 +496,31 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     }
   }
 
+  @Test
+  public void test006_parentRegisteredInLaterPass() throws Exception {
+    boolean oldSuspended = Job.getJobManager().isSuspended();
+
+    Job.getJobManager().suspend();
+    try {
+      // t006-p7 can only be read once its parent t006-p6, which is not in the repository, is registered, while
+      // t006-p8 can be read with the older t006-p7 in the repository right away
+      IProject p6 = createExisting("t006-p6");
+      IProject p7 = createExisting("t006-p7");
+      IProject p8 = createExisting("t006-p8");
+
+      refresh(false, true, getPomFiles(p6, p7, p8));
+
+      IMavenProjectFacade f7 = manager.create(p7, monitor);
+      assertEquals("t006-p7", "workspace", f7.getMavenProject(monitor).getProperties().get("property"));
+      IMavenProjectFacade f8 = manager.create(p8, monitor);
+      assertEquals("t006-p8", "workspace", f8.getMavenProject(monitor).getProperties().get("property"));
+    } finally {
+      if(!oldSuspended) {
+        Job.getJobManager().resume();
+      }
+    }
+  }
+
   protected MavenProject getParentProject(final IMavenProjectFacade f) throws CoreException {
     // create execution context with proper resolver configuration
     IMavenExecutionContext context = manager.createExecutionContext(f.getPom(), f.getConfiguration());

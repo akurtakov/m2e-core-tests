@@ -19,6 +19,7 @@
     <module>t005-p2</module>
     <module>t005-p4</module>
     <module>t006-p2</module>
+    <module>t006-p7</module>
     <module>t021_dependencyVersionRange-p2</module>
   </modules>
 </project>
