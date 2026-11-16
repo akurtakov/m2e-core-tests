@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?><project>
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>t006</groupId>
+    <artifactId>t006-p3</artifactId>
+    <version>0.0.1</version>
+    <relativePath>../t006-p3/pom.xml</relativePath>
+  </parent>
+
+  <artifactId>t006-p4</artifactId>
+
+</project>

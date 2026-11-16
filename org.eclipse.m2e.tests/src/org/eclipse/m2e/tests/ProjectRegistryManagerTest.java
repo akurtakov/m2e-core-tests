@@ -442,6 +442,30 @@ public class ProjectRegistryManagerTest extends AbstractMavenProjectTestCase {
     }
   }
 
+  @Test
+  public void test006_grandparentAvailableFromLocalRepoAndWorkspace() throws Exception {
+    boolean oldSuspended = Job.getJobManager().isSuspended();
+
+    Job.getJobManager().suspend();
+    try {
+      // t006-p3 has t006-p2 as parent, which is not at its relativePath, t006-p4 finds t006-p3 at its relativePath
+      IProject p2 = createExisting("t006-p2");
+      IProject p3 = createExisting("t006-p3");
+      IProject p4 = createExisting("t006-p4");
+
+      refresh(false, true, getPomFiles(p2, p3, p4));
+
+      IMavenProjectFacade f3 = manager.create(p3, monitor);
+      assertEquals("t006-p3", "workspace", f3.getMavenProject(monitor).getProperties().get("property"));
+      IMavenProjectFacade f4 = manager.create(p4, monitor);
+      assertEquals("t006-p4", "workspace", f4.getMavenProject(monitor).getProperties().get("property"));
+    } finally {
+      if(!oldSuspended) {
+        Job.getJobManager().resume();
+      }
+    }
+  }
+
   protected MavenProject getParentProject(final IMavenProjectFacade f) throws CoreException {
     // create execution context with proper resolver configuration
     IMavenExecutionContext context = manager.createExecutionContext(f.getPom(), f.getConfiguration());
